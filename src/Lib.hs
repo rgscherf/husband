@@ -58,26 +58,26 @@ incPtr = modPtr succ (-arrayBound)
 decPtr = modPtr pred arrayBound
 
 -- Modifying tape values
-modTape
+modCell
     :: (Int -> Int -> Int)
     -> (Array Int Int)
     -> Int
     -> ConstraintMap
     -> (Array Int Int)
-modTape op arr ptr cons = case Data.Map.lookup ptr cons of
+modCell op arr ptr cons = case Data.Map.lookup ptr cons of
     Just NoCons -> arr // [(ptr, (op) (arr ! ptr) 1)]
     _           -> arr
 
-incTape = modTape (+)
-decTape = modTape (-)
+incCell = modCell (+)
+decCell = modCell (-)
 
 evalExprs :: [Expr] -> Tape -> Tape
 evalExprs []       tape                   = tape
 evalExprs (e : es) (Tape arr ptr pq cons) = case e of
     Print ->
         evalExprs es (Tape arr ptr ((chr $ mod (arr ! ptr) 128) : pq) cons)
-    Inc        -> evalExprs es (Tape (incTape arr ptr cons) ptr pq cons)
-    Dec        -> evalExprs es (Tape (decTape arr ptr cons) ptr pq cons)
+    Inc        -> evalExprs es (Tape (incCell arr ptr cons) ptr pq cons)
+    Dec        -> evalExprs es (Tape (decCell arr ptr cons) ptr pq cons)
     MvRight    -> evalExprs es (Tape arr (incPtr ptr) pq cons)
     MvLeft     -> evalExprs es (Tape arr (decPtr ptr) pq cons)
     Loop exprs -> case arr ! ptr of
