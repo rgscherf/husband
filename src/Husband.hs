@@ -1,6 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module Lib where
+module Husband where
 
 import           Text.Parsec.String
 import           Text.Parsec.Combinator

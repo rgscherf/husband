@@ -26,6 +26,10 @@ For example, `+{+++}` saves the function "increment the current tape cell three 
 
 ## Usage
 
+From the command line:
+
+Compile an executable, or just use `stack run "{husband-exprs}"`
+
 From the Haskell repl:
 
 ```
