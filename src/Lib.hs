@@ -1,3 +1,5 @@
+{-# LANGUAGE RecordWildCards #-}
+
 module Lib where
 
 import           Text.Parsec.String
@@ -50,8 +52,11 @@ initArr = array (-arrayBound, arrayBound)
                 [ (n, 0) | n <- [(-arrayBound) .. arrayBound] ]
 arrayBound = 10
 
-data Tape = Tape (Array Int Int) Int [Char] ConstraintMap
-     deriving (Show)
+data Tape = T { tTape :: Array Int Int
+              , tPointer :: Int
+              , tPrintQueue :: [Char]
+              , tConstraints :: ConstraintMap
+              } deriving (Show)
 
 -- Incrementing and decrementing the pointer
 modPtr :: (Int -> Int) -> Int -> Int -> Int
@@ -98,8 +103,8 @@ modCell op arr ptr cons
                       ++ " not found on the tape."
 
 tryModCell :: CellOp -> Tape -> Either String Tape
-tryModCell op (Tape arr ptr pq cons) = case modCell op arr ptr cons of
-    Right arr' -> Right $ Tape arr' ptr pq cons
+tryModCell op tape@T {..} = case modCell op tTape tPointer tConstraints of
+    Right arr' -> Right $ tape { tTape = arr' }
     Left  s    -> Left s
 
 writeCons :: ConstraintMap -> Int -> CellCons -> ConstraintMap
@@ -122,29 +127,29 @@ tryWriteCons cons key val = case Data.Map.lookup key cons of
             ++ show c
             ++ " was already set."
 
-wrapTryWriteCons lockVal (Tape arr ptr pq cons) =
-    case tryWriteCons cons ptr lockVal of
+wrapTryWriteCons lockVal tape@T {..} =
+    case tryWriteCons tConstraints tPointer lockVal of
         Left  s -> Left s
-        Right c -> Right $ Tape arr ptr pq c
+        Right c -> Right $ tape { tConstraints = c }
 
 -- try to evaluate exprs.
 -- evalution can fail iff user tries to modify a tape cell with a previously-imposed constraint.
 evalExprs :: [Expr] -> Either String Tape -> Either String Tape
-evalExprs []       tape                           = tape
-evalExprs _        (Left  s                     ) = Left s
-evalExprs (e : es) (Right (Tape arr ptr pq cons)) = case e of
-    Print -> evalExprs es
-        $ Right (Tape arr ptr ((chr $ mod (arr ! ptr) 128) : pq) cons)
-    Inc        -> evalExprs es $ tryModCell IncOp (Tape arr ptr pq cons)
-    Dec        -> evalExprs es $ tryModCell DecOp (Tape arr ptr pq cons)
-    MvRight    -> evalExprs es $ Right (Tape arr (incPtr ptr) pq cons)
-    MvLeft     -> evalExprs es $ Right (Tape arr (decPtr ptr) pq cons)
-    LockInc    -> evalExprs es $ wrapTryWriteCons OnlyInc $ Tape arr ptr pq cons
-    LockDec    -> evalExprs es $ wrapTryWriteCons OnlyDec $ Tape arr ptr pq cons
-    Loop exprs -> case arr ! ptr of
-        0 -> evalExprs es $ Right $ Tape arr ptr pq cons
-        _ ->
-            evalExprs (e : es) $ evalExprs exprs $ Right (Tape arr ptr pq cons)
+evalExprs []       tape                = tape
+evalExprs _        (Left  s          ) = Left s
+evalExprs (e : es) (Right tape@T {..}) = case e of
+    Print -> evalExprs es . Right $ tape
+        { tPrintQueue = ((chr $ mod (tTape ! tPointer) 128) : tPrintQueue)
+        }
+    Inc        -> evalExprs es $ tryModCell IncOp tape
+    Dec        -> evalExprs es $ tryModCell DecOp tape
+    MvRight    -> evalExprs es $ Right tape { tPointer = incPtr tPointer }
+    MvLeft     -> evalExprs es $ Right tape { tPointer = decPtr tPointer }
+    LockInc    -> evalExprs es $ wrapTryWriteCons OnlyInc tape
+    LockDec    -> evalExprs es $ wrapTryWriteCons OnlyDec tape
+    Loop exprs -> case tTape ! tPointer of
+        0 -> evalExprs es $ Right tape
+        _ -> evalExprs (e : es) . evalExprs exprs $ Right tape
 
 regularParse :: Parser a -> String -> Either ParseError a
 regularParse p = parse p ""
@@ -157,10 +162,10 @@ type HusbandResult = ([Char], [Int])
 eval :: String -> HusbandResult
 eval s =
     let exprs = strToExprs s
-        tape  = Right $ Tape initArr 0 [] initConstraintMap
+        tape  = Right $ T initArr 0 [] initConstraintMap
     in  case evalExprs exprs tape of
-            Right (Tape arr _ pq _) -> (reverse pq, elems arr)
-            Left  s                 -> (s, [])
+            Right T {..} -> (reverse tPrintQueue, elems tTape)
+            Left  s      -> (s, [])
 
 data CellOp
     = IncOp
