@@ -12,6 +12,17 @@ import           Data.Map                          hiding ( (!)
                                                           , elems
                                                           )
 
+
+-------------------------
+-- TYPES
+-------------------------
+
+data Tape = T { tTape :: Array Int Int
+              , tPointer :: Int
+              , tPrintQueue :: [Char]
+              , tConstraints :: ConstraintMap
+              } deriving (Show)
+
 data Expr
     = MvRight
     | MvLeft
@@ -22,6 +33,26 @@ data Expr
     | LockInc
     | LockDec
     deriving (Show)
+
+data CellOp
+    = IncOp
+    | DecOp
+    deriving (Eq)
+
+data CellCons
+    = OnlyInc
+    | OnlyDec
+    | NoCons
+    deriving (Eq, Show)
+
+type ConstraintMap = Map Int CellCons
+
+type HusbandResult = ([Char], [Int])
+
+
+-------------------------
+-- PARSERS
+-------------------------
 
 inc, dec, right, left, loop, prn, lockInc, lockDec :: Parser Expr
 inc = char '+' >> return Inc
@@ -43,20 +74,25 @@ exprP = loop <|> inc <|> dec <|> right <|> left <|> prn <|> lockInc <|> lockDec
 exprs :: Parser [Expr]
 exprs = many exprP
 
----------------------------
--- MANAGING STATE: THE TAPE
----------------------------
+
+-------------------------
+-- INITIALIZERS
+-------------------------
 
 initArr :: Array Int Int
 initArr = array (-arrayBound, arrayBound)
                 [ (n, 0) | n <- [(-arrayBound) .. arrayBound] ]
+
+arrayBound :: Int
 arrayBound = 10
 
-data Tape = T { tTape :: Array Int Int
-              , tPointer :: Int
-              , tPrintQueue :: [Char]
-              , tConstraints :: ConstraintMap
-              } deriving (Show)
+initConstraintMap :: Map Int CellCons
+initConstraintMap = fromList [ (i, NoCons) | i <- [-arrayBound .. arrayBound] ]
+
+
+-------------------------
+-- MANAGING TAPE STATE
+-------------------------
 
 -- Incrementing and decrementing the pointer
 modPtr :: (Int -> Int) -> Int -> Int -> Int
@@ -79,7 +115,7 @@ mkModErr triedTo ptrPos markedAs =
 -- Modifying tape values
 modCell
     :: CellOp
-    -> (Array Int Int)
+    -> Array Int Int
     -> Int
     -> ConstraintMap
     -> Either String (Array Int Int)
@@ -111,6 +147,8 @@ writeCons :: ConstraintMap -> Int -> CellCons -> ConstraintMap
 writeCons cons key val =
     if val == NoCons then cons else update (\v -> Just val) key cons
 
+-- Try to write constraint to a given tape cell. 
+-- Will fail if the opposing constraint already exists for that cell.
 tryWriteCons :: ConstraintMap -> Int -> CellCons -> Either String ConstraintMap
 tryWriteCons cons key val = case Data.Map.lookup key cons of
     Just NoCons -> Right $ writeCons cons key val
@@ -127,10 +165,22 @@ tryWriteCons cons key val = case Data.Map.lookup key cons of
             ++ show c
             ++ " was already set."
 
+-- Wrap an attempt to write cell constraint with the return type of evalExprs.
+wrapTryWriteCons :: CellCons -> Tape -> Either String Tape
 wrapTryWriteCons lockVal tape@T {..} =
     case tryWriteCons tConstraints tPointer lockVal of
         Left  s -> Left s
-        Right c -> Right $ tape { tConstraints = c }
+        Right c -> Right tape { tConstraints = c }
+
+
+-- Add char representation of current pointer value to the print queue.
+addToPrintQueue :: Tape -> String
+addToPrintQueue T {..} = ((chr $ mod (tTape ! tPointer) 128) : tPrintQueue)
+
+
+-------------------------
+-- EVALUATION
+-------------------------
 
 -- try to evaluate exprs.
 -- evalution can fail iff user tries to modify a tape cell with a previously-imposed constraint.
@@ -138,9 +188,7 @@ evalExprs :: [Expr] -> Either String Tape -> Either String Tape
 evalExprs []       tape                = tape
 evalExprs _        (Left  s          ) = Left s
 evalExprs (e : es) (Right tape@T {..}) = case e of
-    Print -> evalExprs es . Right $ tape
-        { tPrintQueue = ((chr $ mod (tTape ! tPointer) 128) : tPrintQueue)
-        }
+    Print -> evalExprs es $ Right tape { tPrintQueue = addToPrintQueue tape }
     Inc        -> evalExprs es $ tryModCell IncOp tape
     Dec        -> evalExprs es $ tryModCell DecOp tape
     MvRight    -> evalExprs es $ Right tape { tPointer = incPtr tPointer }
@@ -158,7 +206,6 @@ strToExprs s = case regularParse exprs s of
     Right e -> e
     Left  _ -> []
 
-type HusbandResult = ([Char], [Int])
 eval :: String -> HusbandResult
 eval s =
     let exprs = strToExprs s
@@ -166,21 +213,4 @@ eval s =
     in  case evalExprs exprs tape of
             Right T {..} -> (reverse tPrintQueue, elems tTape)
             Left  s      -> (s, [])
-
-data CellOp
-    = IncOp
-    | DecOp
-    deriving (Eq)
-
-data CellCons
-    = OnlyInc
-    | OnlyDec
-    | NoCons
-    deriving (Eq, Show)
-
-type ConstraintMap = Map Int CellCons
-
-initConstraintMap :: Map Int CellCons
-initConstraintMap = fromList [ (i, NoCons) | i <- [-arrayBound .. arrayBound] ]
-
 
