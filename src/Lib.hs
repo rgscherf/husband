@@ -21,6 +21,7 @@ data Tape = T { tTape :: Array Int Int
               , tPointer :: Int
               , tPrintQueue :: [Char]
               , tConstraints :: ConstraintMap
+              , tFunctionMap :: FunctionMap
               } deriving (Show)
 
 data Expr
@@ -32,6 +33,8 @@ data Expr
     | Print
     | LockInc
     | LockDec
+    | Defn [Expr]
+    | CallFn
     deriving (Show)
 
 data CellOp
@@ -47,6 +50,8 @@ data CellCons
 
 type ConstraintMap = Map Int CellCons
 
+type FunctionMap = Map Int [Expr]
+
 type HusbandResult = ([Char], [Int])
 
 
@@ -54,7 +59,7 @@ type HusbandResult = ([Char], [Int])
 -- PARSERS
 -------------------------
 
-inc, dec, right, left, loop, prn, lockInc, lockDec :: Parser Expr
+inc, dec, right, left, loop, prn, lockInc, lockDec, defn, callfn :: Parser Expr
 inc = char '+' >> return Inc
 dec = char '-' >> return Dec
 right = char '>' >> return MvRight
@@ -67,9 +72,25 @@ loop = do
     exs <- many1 exprP
     char ']'
     return $ Loop exs
+defn = do
+    char '{'
+    exs <- many1 exprP
+    char '}'
+    return $ Defn exs
+callfn = char ';' >> return CallFn
 
 exprP :: Parser Expr
-exprP = loop <|> inc <|> dec <|> right <|> left <|> prn <|> lockInc <|> lockDec
+exprP =
+    loop
+        <|> callfn
+        <|> inc
+        <|> dec
+        <|> right
+        <|> left
+        <|> prn
+        <|> lockInc
+        <|> lockDec
+        <|> defn
 
 exprs :: Parser [Expr]
 exprs = many exprP
@@ -86,8 +107,11 @@ initArr = array (-arrayBound, arrayBound)
 arrayBound :: Int
 arrayBound = 10
 
-initConstraintMap :: Map Int CellCons
+initConstraintMap :: ConstraintMap
 initConstraintMap = fromList [ (i, NoCons) | i <- [-arrayBound .. arrayBound] ]
+
+initFunctionMap :: FunctionMap
+initFunctionMap = empty -- [ (i, []) | i <- [-arrayBound .. arrayBound] ]
 
 
 -------------------------
@@ -177,6 +201,8 @@ wrapTryWriteCons lockVal tape@T {..} =
 addToPrintQueue :: Tape -> String
 addToPrintQueue T {..} = ((chr $ mod (tTape ! tPointer) 128) : tPrintQueue)
 
+assocFn :: Int -> [Expr] -> FunctionMap -> FunctionMap
+assocFn ptr exprs fm = insert ptr exprs fm
 
 -------------------------
 -- EVALUATION
@@ -198,6 +224,19 @@ evalExprs (e : es) (Right tape@T {..}) = case e of
     Loop exprs -> case tTape ! tPointer of
         0 -> evalExprs es $ Right tape
         _ -> evalExprs (e : es) . evalExprs exprs $ Right tape
+    Defn exprs -> evalExprs es $ Right tape
+        { tFunctionMap = assocFn (tTape ! tPointer) exprs tFunctionMap
+        }
+    CallFn -> case Data.Map.lookup (tTape ! tPointer) tFunctionMap of
+        Nothing ->
+            Left
+                $  "Tried to call undefined function at value "
+                ++ show (tTape ! tPointer)
+                ++ "."
+                ++ " Functions are defined for values: "
+                ++ (show $ keys tFunctionMap)
+        Just exprs -> evalExprs es . evalExprs exprs $ Right tape
+
 
 regularParse :: Parser a -> String -> Either ParseError a
 regularParse p = parse p ""
@@ -209,7 +248,7 @@ strToExprs s = case regularParse exprs s of
 eval :: String -> HusbandResult
 eval s =
     let exprs = strToExprs s
-        tape  = Right $ T initArr 0 [] initConstraintMap
+        tape  = Right $ T initArr 0 [] initConstraintMap initFunctionMap
     in  case evalExprs exprs tape of
             Right T {..} -> (reverse tPrintQueue, elems tTape)
             Left  s      -> (s, [])
